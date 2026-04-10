@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-import csv
 import logging
-from pathlib import Path
 
 from review_mas.state import EnrichedReview, FraudAssessment, GraphState, ReviewRecord
+from review_mas.tools.scraper_tools import (
+    CsvValidationError,
+    filter_reviews_by_product_id,
+    find_top_product_ids,
+    load_and_validate_reviews_csv,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,33 +22,49 @@ def _append_trace(state: GraphState, agent: str, detail: str) -> list[dict]:
 
 
 def scraper_node(state: GraphState) -> dict:
-    """Agent 1: load raw reviews from local CSV (replace with dedicated tools later)."""
-    path = Path(state.get("dataset_path") or "data/sample_reviews.csv")
-    if not path.is_file():
-        logger.error("Dataset not found: %s", path)
+    """Agent 1: load and validate raw reviews from a local CSV (tool-based)."""
+    dataset_path = state.get("dataset_path") or "data/sample_reviews.csv"
+    try:
+        rows: list[ReviewRecord] = load_and_validate_reviews_csv(dataset_path)
+    except FileNotFoundError as e:
+        logger.error(str(e))
         return {
             "raw_reviews": [],
-            "trace": _append_trace(state, "scraper", f"missing file: {path}"),
+            "trace": _append_trace(state, "scraper", f"missing file: {dataset_path}"),
+        }
+    except CsvValidationError as e:
+        logger.error(str(e))
+        return {
+            "raw_reviews": [],
+            "trace": _append_trace(state, "scraper", f"invalid csv: {e}"),
         }
 
-    rows: list[ReviewRecord] = []
-    with path.open(encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(
-                {
-                    "review_id": row.get("review_id", ""),
-                    "product_id": row.get("product_id", ""),
-                    "rating": int(row["rating"]) if row.get("rating") else 0,
-                    "review_text": (row.get("review_text") or "").strip(),
-                    "review_date": row.get("review_date") or "",
-                }
-            )
+    chosen_product_id = (state.get("product_id") or "").strip()
+    if state.get("auto_product", False) and not chosen_product_id:
+        top = find_top_product_ids(dataset_path, top_k=1)
+        if top:
+            chosen_product_id = top[0][0]
 
-    logger.info("Scraper loaded %d reviews from %s", len(rows), path)
+    if chosen_product_id:
+        rows = filter_reviews_by_product_id(rows, chosen_product_id)
+
+    logger.info(
+        "Scraper loaded %d reviews from %s%s",
+        len(rows),
+        dataset_path,
+        f" (product_id={chosen_product_id})" if chosen_product_id else "",
+    )
     return {
         "raw_reviews": rows,
-        "trace": _append_trace(state, "scraper", f"loaded {len(rows)} rows"),
+        "trace": _append_trace(
+            state,
+            "scraper",
+            (
+                f"tool:load_and_validate_reviews_csv rows={len(rows)}"
+                + (f" product_id={chosen_product_id}" if chosen_product_id else "")
+                + (" auto_product=true" if state.get("auto_product", False) else "")
+            ),
+        ),
     }
 
 
@@ -101,17 +121,65 @@ def fraud_node(state: GraphState) -> dict:
 
 
 def recommendation_node(state: GraphState) -> dict:
-    """Agent 4: buyer report (stub — replace with Ollama + report tool)."""
+    """Agent 4: buyer report (uses Ollama when enabled)."""
     n = len(state.get("enriched_reviews") or [])
     flags = sum(1 for a in state.get("fraud_assessments") or [] if a.get("flagged"))
+
+    if state.get("use_ollama", False):
+        model = state.get("ollama_model") or "phi3"
+        try:
+            from langchain_ollama import ChatOllama
+            from langchain_core.messages import SystemMessage, HumanMessage
+
+            llm = ChatOllama(model=model, temperature=0.2)
+            prompt = (
+                "You are a buyer assistant for an e-commerce review analysis system.\n"
+                "Write a concise recommendation report in Markdown with these sections:\n"
+                "## Should you buy?\n"
+                "## Pros\n"
+                "## Cons\n"
+                "## Red flags\n"
+                "## Confidence\n\n"
+                "Use only the provided summary. Do not invent product features.\n\n"
+                f"Summary:\n- Reviews analyzed: {n}\n- Suspicious flags: {flags}\n"
+            )
+            msg = llm.invoke(
+                [
+                    SystemMessage(
+                        content="Follow instructions strictly. Be brief and factual."
+                    ),
+                    HumanMessage(content=prompt),
+                ]
+            )
+            report = str(getattr(msg, "content", "")).strip()
+            if not report:
+                raise RuntimeError("Ollama returned empty content")
+
+            logger.info("Recommendation generated with Ollama model=%s", model)
+            return {
+                "final_report": report,
+                "trace": _append_trace(
+                    state, "recommendation", f"ollama:{model} report_len={len(report)}"
+                ),
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Ollama recommendation failed")
+            raise RuntimeError(
+                "Ollama call failed. Ensure Ollama is installed and running, and the model is pulled.\n"
+                "Example:\n"
+                "  ollama pull phi3\n"
+                "  ollama serve\n"
+                f"Original error: {e}"
+            ) from e
+
     report = (
         f"## Should you buy? (stub)\n\n"
         f"- Reviews analyzed: **{n}**\n"
         f"- Suspicious / duplicate-text flags: **{flags}**\n\n"
-        f"_Replace this section with LLM synthesis and structured pros/cons._\n"
+        f"_Run with --use-ollama to generate an Ollama-backed report._\n"
     )
-    logger.info("Recommendation generated (stub)")
+    logger.info("Recommendation generated (stub; Ollama disabled)")
     return {
         "final_report": report,
-        "trace": _append_trace(state, "recommendation", "stub markdown report"),
+        "trace": _append_trace(state, "recommendation", "stub markdown report (ollama disabled)"),
     }

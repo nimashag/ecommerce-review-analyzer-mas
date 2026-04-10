@@ -16,7 +16,10 @@ from review_mas.graph import run_pipeline  # noqa: E402
 
 def test_pipeline_smoke():
     state = run_pipeline(
-        {"dataset_path": str(_ROOT / "data" / "sample_reviews.csv")}
+        {
+            "dataset_path": str(_ROOT / "data" / "sample_reviews.csv"),
+            "use_ollama": False,
+        }
     )
     assert state.get("raw_reviews")
     assert state.get("enriched_reviews")

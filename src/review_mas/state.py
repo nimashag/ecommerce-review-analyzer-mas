@@ -36,6 +36,10 @@ class GraphState(TypedDict, total=False):
     """LangGraph state: keys updated incrementally by each node."""
 
     dataset_path: str
+    product_id: str
+    auto_product: bool
+    use_ollama: bool
+    ollama_model: str
     raw_reviews: list[ReviewRecord]
     enriched_reviews: list[EnrichedReview]
     fraud_assessments: list[FraudAssessment]

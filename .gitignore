@@ -29,3 +29,6 @@ Thumbs.db
 
 # Large local datasets (add your own; keep sample_reviews.csv in git)
 data/raw/
+# Optional: ignore big HF exports; remove this line if you commit a small slice
+data/hf_reviews_sample.csv
+data/hf_reviews_electronics.csv

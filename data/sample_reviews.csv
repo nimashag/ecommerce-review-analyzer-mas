@@ -1,0 +1,5 @@
+review_id,product_id,rating,review_text,review_date
+1,demo-phone,5,"Great battery life and smooth display. Highly recommend.",2024-01-10
+2,demo-phone,1,"Terrible. Stopped working after a week. Waste of money.",2024-01-11
+3,demo-phone,5,"Great battery life and smooth display. Highly recommend.",2024-01-12
+4,demo-phone,4,"Good value. Camera is okay for the price.",2024-01-15

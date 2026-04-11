@@ -29,4 +29,8 @@ def test_pipeline_smoke():
     assert isinstance(state.get("fraud_summary"), dict)
     assert state.get("fraud_assessments") is not None
     assert state.get("final_report")
+    rp = state.get("report_path")
+    assert rp
+    assert Path(rp).is_file()
+    assert Path(rp).read_text(encoding="utf-8") == state["final_report"]
     assert isinstance(state.get("trace"), list)

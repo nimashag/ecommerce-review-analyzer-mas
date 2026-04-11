@@ -36,3 +36,7 @@ data/hf_reviews_electronics.csv
 # Generated agent / pipeline outputs (local only; do not commit)
 outputs/**
 !outputs/.gitkeep
+
+# Buyer Markdown reports from Agent 4 (local only)
+reports/**
+!reports/.gitkeep

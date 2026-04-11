@@ -205,13 +205,17 @@ def fraud_node(state: GraphState) -> dict:
 
 
 def recommendation_node(state: GraphState) -> dict:
-    """Agent 4: buyer report (uses Ollama when enabled)."""
+    """Agent 4: buyer report (uses Ollama when enabled); writes Markdown via tool."""
+    from review_mas.tools.recommendation_tools import write_markdown_report
+
     n = len(state.get("enriched_reviews") or [])
     flags = sum(1 for a in state.get("fraud_assessments") or [] if a.get("flagged"))
     summary = state.get("analysis_summary") or {}
     fraud_s = state.get("fraud_summary") or {}
     facts_json = json.dumps(summary, ensure_ascii=False)
     fraud_json = json.dumps(fraud_s, ensure_ascii=False)
+
+    trace_detail: str
 
     if state.get("use_ollama", False):
         model = state.get("ollama_model") or "phi3"
@@ -251,12 +255,7 @@ def recommendation_node(state: GraphState) -> dict:
                 raise RuntimeError("Ollama returned empty content")
 
             logger.info("Recommendation generated with Ollama model=%s", model)
-            return {
-                "final_report": report,
-                "trace": _append_trace(
-                    state, "recommendation", f"ollama:{model} report_len={len(report)}"
-                ),
-            }
+            trace_detail = f"ollama:{model} report_len={len(report)}"
         except Exception as e:  # noqa: BLE001
             logger.exception("Ollama recommendation failed")
             raise RuntimeError(
@@ -266,18 +265,25 @@ def recommendation_node(state: GraphState) -> dict:
                 "  ollama serve\n"
                 f"Original error: {e}"
             ) from e
+    else:
+        avg = summary.get("avg_rating", "n/a")
+        fc = fraud_s.get("flagged_count", "n/a")
+        report = (
+            f"## Should you buy? (stub)\n\n"
+            f"- Reviews analyzed: **{n}**\n"
+            f"- Avg rating (from data): **{avg}**\n"
+            f"- Fraud flagged (from fraud_summary): **{fc}** (per-review flags: **{flags}**)\n\n"
+            f"_Run with --use-ollama to generate an Ollama-backed report._\n"
+        )
+        logger.info("Recommendation generated (stub; Ollama disabled)")
+        trace_detail = "stub markdown report (ollama disabled)"
 
-    avg = summary.get("avg_rating", "n/a")
-    fc = fraud_s.get("flagged_count", "n/a")
-    report = (
-        f"## Should you buy? (stub)\n\n"
-        f"- Reviews analyzed: **{n}**\n"
-        f"- Avg rating (from data): **{avg}**\n"
-        f"- Fraud flagged (from fraud_summary): **{fc}** (per-review flags: **{flags}**)\n\n"
-        f"_Run with --use-ollama to generate an Ollama-backed report._\n"
-    )
-    logger.info("Recommendation generated (stub; Ollama disabled)")
+    report_path = write_markdown_report("final_buyer_report.md", report)
+    logger.info("Buyer report written to %s", report_path)
+    trace_detail = f"{trace_detail}; tool:write_markdown_report path={report_path}"
+
     return {
         "final_report": report,
-        "trace": _append_trace(state, "recommendation", "stub markdown report (ollama disabled)"),
+        "report_path": report_path,
+        "trace": _append_trace(state, "recommendation", trace_detail),
     }

@@ -48,10 +48,13 @@ def _print_agent_outputs(state: dict, sample: int) -> None:
     print("\n=== Agent 3 (Fraud) — fraud_summary (aggregate JSON) ===\n")
     print(json.dumps(state.get("fraud_summary") or {}, indent=2, ensure_ascii=False))
 
-    print(
-        "\n=== Agent 4 (Recommendation) — final_report ===\n"
-        "(Printed above under '--- final_report ---'.)\n"
-    )
+    print("\n=== Agent 4 (Recommendation) — report_path ===\n")
+    print(state.get("report_path") or "(not set)")
+
+    print("\n=== Agent 4 (Recommendation) — final_report (preview) ===\n")
+    report = state.get("final_report") or ""
+    preview = report[:1200] + ("…\n" if len(report) > 1200 else "")
+    print(preview or "(empty)")
 
 
 def main() -> None:

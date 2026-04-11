@@ -48,4 +48,5 @@ class GraphState(TypedDict, total=False):
     # Aggregate fraud stats + optional grounded LLM explanation
     fraud_summary: dict[str, Any]
     final_report: str
+    report_path: str
     trace: list[dict[str, Any]]

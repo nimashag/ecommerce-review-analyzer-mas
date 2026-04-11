@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from review_mas.state import EnrichedReview, FraudAssessment, GraphState, ReviewRecord
+from review_mas.tools.analysis_tools import (
+    compute_review_statistics,
+    extract_top_keywords,
+    sentiment_label_from_rating,
+    topics_for_review,
+)
+from review_mas.tools.fraud_tools import assess_fraud_patterns
 from review_mas.tools.scraper_tools import (
     CsvValidationError,
     filter_reviews_by_product_id,
@@ -69,54 +77,130 @@ def scraper_node(state: GraphState) -> dict:
 
 
 def analysis_node(state: GraphState) -> dict:
-    """Agent 2: sentiment/topics (stub — add model + keyword tools)."""
+    """Agent 2: deterministic stats + keywords; optional Ollama topic labels from facts only."""
+    raw = list(state.get("raw_reviews") or [])
+    stats = compute_review_statistics(raw)
+    keyword_pairs = extract_top_keywords(raw, top_n=20)
+    top_terms = [w for w, _ in keyword_pairs[:15]]
+
     enriched: list[EnrichedReview] = []
-    for r in state.get("raw_reviews") or []:
+    for r in raw:
+        rating = int(r.get("rating") or 0)
+        label, score = sentiment_label_from_rating(rating)
         text = r.get("review_text") or ""
-        label = "positive" if r.get("rating", 0) >= 4 else "negative"
+        topics = topics_for_review(text, top_terms, max_topics=5)
         enriched.append(
             {
                 **r,
                 "sentiment_label": label,
-                "sentiment_score": 0.5 if label == "positive" else -0.5,
-                "topics": [],
+                "sentiment_score": score,
+                "topics": topics,
             }
         )
-    logger.info("Analysis enriched %d reviews (stub)", len(enriched))
+
+    analysis_summary: dict = {
+        **stats,
+        "top_keywords": [{"term": w, "count": c} for w, c in keyword_pairs[:10]],
+    }
+
+    trace_detail = (
+        f"tool:compute_review_statistics+extract_top_keywords "
+        f"n={stats.get('n_reviews')} avg_rating={stats.get('avg_rating')}"
+    )
+
+    if state.get("use_ollama", False):
+        model = state.get("ollama_model") or "phi3"
+        try:
+            from langchain_core.messages import HumanMessage, SystemMessage
+            from langchain_ollama import ChatOllama
+
+            llm = ChatOllama(model=model, temperature=0.1)
+            facts_json = json.dumps(analysis_summary, ensure_ascii=False)
+            prompt = (
+                "You label product-review themes for a buyer report.\n"
+                "Rules:\n"
+                "- Use ONLY the JSON facts below (counts, histogram, keyword list).\n"
+                "- Do NOT invent percentages, prices, shipping claims, or product specs.\n"
+                "- Output EXACTLY 5 lines, each line one short topic label (2-5 words), no numbering.\n\n"
+                f"FACTS_JSON:\n{facts_json}\n"
+            )
+            msg = llm.invoke(
+                [
+                    SystemMessage(
+                        content="Follow output format strictly. No markdown fences."
+                    ),
+                    HumanMessage(content=prompt),
+                ]
+            )
+            raw_text = str(getattr(msg, "content", "")).strip()
+            lines = [ln.strip("- ").strip() for ln in raw_text.splitlines() if ln.strip()]
+            labels = [ln for ln in lines if ln][:5]
+            if labels:
+                analysis_summary["llm_topic_labels"] = labels
+                trace_detail += f" ollama:{model} topic_labels={len(labels)}"
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Analysis Ollama topic step failed (continuing without): %s", e)
+            trace_detail += " ollama_topic_failed=true"
+
+    logger.info("Analysis enriched %d reviews", len(enriched))
     return {
         "enriched_reviews": enriched,
-        "trace": _append_trace(state, "analysis", "stub sentiment by rating"),
+        "analysis_summary": analysis_summary,
+        "trace": _append_trace(state, "analysis", trace_detail),
     }
 
 
 def fraud_node(state: GraphState) -> dict:
-    """Agent 3: fraud signals (stub — duplicate text detection)."""
-    seen_text: dict[str, str] = {}
-    assessments: list[FraudAssessment] = []
-    for r in state.get("enriched_reviews") or []:
-        rid = r.get("review_id", "")
-        text = (r.get("review_text") or "").strip().lower()
-        dup_of = seen_text.get(text)
-        flagged = dup_of is not None
-        if not flagged:
-            seen_text[text] = rid
-        reasons = ["duplicate_review_text"] if flagged else []
-        score = 0.85 if flagged else 0.1
-        assessments.append(
-            {
-                "review_id": rid,
-                "fraud_score": score,
-                "flagged": flagged,
-                "reasons": reasons,
+    """Agent 3: fraud / spam heuristics via tools; optional Ollama overview from facts only."""
+    enriched = list(state.get("enriched_reviews") or [])
+    assessments, fraud_summary = assess_fraud_patterns(enriched)
+    flagged_n = int(fraud_summary.get("flagged_count") or 0)
+
+    trace_detail = (
+        f"tool:assess_fraud_patterns flagged={flagged_n} "
+        f"avg_score={fraud_summary.get('avg_fraud_score')}"
+    )
+
+    if state.get("use_ollama", False):
+        model = state.get("ollama_model") or "phi3"
+        try:
+            from langchain_core.messages import HumanMessage, SystemMessage
+            from langchain_ollama import ChatOllama
+
+            llm = ChatOllama(model=model, temperature=0.1)
+            flagged_rows = [a for a in assessments if a.get("flagged")][:8]
+            payload = {
+                "fraud_summary": fraud_summary,
+                "flagged_sample": flagged_rows,
             }
-        )
-    flagged_n = sum(1 for a in assessments if a.get("flagged"))
-    logger.info("Fraud assessed %d reviews, %d flagged (stub)", len(assessments), flagged_n)
+            facts_json = json.dumps(payload, ensure_ascii=False)
+            prompt = (
+                "You explain fraud/spam risk for shoppers based ONLY on the JSON below.\n"
+                "Rules:\n"
+                "- Do NOT invent counts; repeat only numbers present in fraud_summary.\n"
+                "- Write EXACTLY 4 bullet lines starting with '- '.\n"
+                "- Each bullet max 20 words.\n\n"
+                f"FACTS_JSON:\n{facts_json}\n"
+            )
+            msg = llm.invoke(
+                [
+                    SystemMessage(content="No markdown fences. No extra sections."),
+                    HumanMessage(content=prompt),
+                ]
+            )
+            txt = str(getattr(msg, "content", "")).strip()
+            if txt:
+                fraud_summary["llm_fraud_overview"] = txt
+                trace_detail += f" ollama:{model} fraud_overview_len={len(txt)}"
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Fraud Ollama overview failed (continuing without): %s", e)
+            trace_detail += " ollama_fraud_failed=true"
+
+    logger.info("Fraud assessed %d reviews, %d flagged", len(assessments), flagged_n)
     return {
         "fraud_assessments": assessments,
-        "trace": _append_trace(
-            state, "fraud", f"stub duplicate check; flagged={flagged_n}"
-        ),
+        "fraud_summary": fraud_summary,
+        "trace": _append_trace(state, "fraud", trace_detail),
     }
 
 
@@ -124,6 +208,10 @@ def recommendation_node(state: GraphState) -> dict:
     """Agent 4: buyer report (uses Ollama when enabled)."""
     n = len(state.get("enriched_reviews") or [])
     flags = sum(1 for a in state.get("fraud_assessments") or [] if a.get("flagged"))
+    summary = state.get("analysis_summary") or {}
+    fraud_s = state.get("fraud_summary") or {}
+    facts_json = json.dumps(summary, ensure_ascii=False)
+    fraud_json = json.dumps(fraud_s, ensure_ascii=False)
 
     if state.get("use_ollama", False):
         model = state.get("ollama_model") or "phi3"
@@ -140,8 +228,15 @@ def recommendation_node(state: GraphState) -> dict:
                 "## Cons\n"
                 "## Red flags\n"
                 "## Confidence\n\n"
-                "Use only the provided summary. Do not invent product features.\n\n"
-                f"Summary:\n- Reviews analyzed: {n}\n- Suspicious flags: {flags}\n"
+                "Rules:\n"
+                "- Use ONLY the numbers and facts in FACTS_JSON, FRAUD_JSON, and the two bullet counts below.\n"
+                "- Do NOT invent percentages, prices, shipping claims, specs, or review counts not shown.\n"
+                "- If a fact is missing, say \"not available\" instead of guessing.\n"
+                "- Use fraud_summary.flagged_count and reason_counts for red flags (do not guess).\n\n"
+                f"- Reviews in this run: {n}\n"
+                f"- Fraud assessments flagged: {flags}\n\n"
+                f"FACTS_JSON:\n{facts_json}\n\n"
+                f"FRAUD_JSON:\n{fraud_json}\n"
             )
             msg = llm.invoke(
                 [
@@ -172,10 +267,13 @@ def recommendation_node(state: GraphState) -> dict:
                 f"Original error: {e}"
             ) from e
 
+    avg = summary.get("avg_rating", "n/a")
+    fc = fraud_s.get("flagged_count", "n/a")
     report = (
         f"## Should you buy? (stub)\n\n"
         f"- Reviews analyzed: **{n}**\n"
-        f"- Suspicious / duplicate-text flags: **{flags}**\n\n"
+        f"- Avg rating (from data): **{avg}**\n"
+        f"- Fraud flagged (from fraud_summary): **{fc}** (per-review flags: **{flags}**)\n\n"
         f"_Run with --use-ollama to generate an Ollama-backed report._\n"
     )
     logger.info("Recommendation generated (stub; Ollama disabled)")

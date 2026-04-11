@@ -78,6 +78,14 @@ Helper tools (support realistic product-specific runs):
 
 From repo root:
 
+### Run **only** Agent 1 and save output to a JSON file
+
+```powershell
+python scripts/run_agent1_scraper.py --dataset data/hf_reviews_electronics.csv --auto-product --out outputs/agent1_scraper.json
+```
+
+Open `outputs/agent1_scraper.json` to inspect `raw_reviews` and the latest trace entries.
+
 ### 1) Export a realistic Electronics dataset (recommended)
 
 This downloads from Hugging Face once (streaming) and writes a local CSV snapshot:

@@ -41,7 +41,11 @@ class GraphState(TypedDict, total=False):
     use_ollama: bool
     ollama_model: str
     raw_reviews: list[ReviewRecord]
+    # Grounded facts from Analysis (JSON-serializable) for Fraud/Recommendation
+    analysis_summary: dict[str, Any]
     enriched_reviews: list[EnrichedReview]
     fraud_assessments: list[FraudAssessment]
+    # Aggregate fraud stats + optional grounded LLM explanation
+    fraud_summary: dict[str, Any]
     final_report: str
     trace: list[dict[str, Any]]

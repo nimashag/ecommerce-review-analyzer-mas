@@ -47,6 +47,22 @@ Uses `data/sample_reviews.csv` by default. Point `dataset_path` at `data/hf_revi
 
 This executes the four-agent **LangGraph** workflow with placeholder logic. Replace stubs with real tools and Ollama calls per agent.
 
+### Print each agent’s outputs (terminal)
+
+After a run, print **samples** from every agent (raw rows, `analysis_summary` JSON, enriched rows, fraud rows, final report):
+
+```powershell
+python run.py --dataset data/hf_reviews_electronics.csv --auto-product --use-ollama --ollama-model phi3 --show-agent-outputs --sample-reviews 5
+```
+
+### Save full terminal output to a file (PowerShell)
+
+The `outputs/` folder exists in this repo. Example:
+
+```powershell
+python run.py --dataset data/hf_reviews_electronics.csv --auto-product --use-ollama --ollama-model phi3 --show-agent-outputs | Tee-Object -FilePath outputs\last_run.txt
+```
+
 ## Layout
 
 | Path | Purpose |
@@ -63,6 +79,8 @@ This executes the four-agent **LangGraph** workflow with placeholder logic. Repl
 ## Agent docs
 
 - Agent 1 (Scraper/Data): `docs/AGENT_1_SCRAPER.md`
+- Agent 2 (Analysis): `docs/AGENT_2_ANALYSIS.md`
+- Agent 3 (Fraud): `docs/AGENT_3_FRAUD.md`
 
 ## Team
 
